@@ -13,10 +13,13 @@ import OSLog
 import SwiftUI
 
 class AccessoryController: ObservableObject {
+    @AppStorage("searchPartyToken") private var searchPartyToken: String = ""
     @Published var accessories: [Accessory]
     var selfObserver: AnyCancellable?
     var listElementsObserver = [AnyCancellable]()
     let findMyController: FindMyController
+
+    weak var savePanel: NSSavePanel?
 
     init(accessories: [Accessory], findMyController: FindMyController) {
         self.accessories = accessories
@@ -95,35 +98,103 @@ class AccessoryController: ObservableObject {
 
     /// Export the accessories property list so it can be imported at another location.
     func export(accessories: [Accessory]) throws -> URL {
-        let propertyList = try PropertyListEncoder().encode(accessories)
 
         let savePanel = NSSavePanel()
-        savePanel.allowedFileTypes = ["plist"]
+        //        savePanel.allowedFileTypes = ["plist", "json"]
+        if #available(macOS 12.0, *) {
+            savePanel.allowedContentTypes = [.propertyList]
+        } else {
+            savePanel.allowedFileTypes = ["plist"]
+        }
+
         savePanel.canCreateDirectories = true
         savePanel.directoryURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
         savePanel.message = "This export contains all private keys! Keep the file save to protect your location data"
         savePanel.nameFieldLabel = "Filename"
-        savePanel.nameFieldStringValue = "openhaystack_accessories.plist"
+        savePanel.nameFieldStringValue = "openhaystack_accessories"
         savePanel.prompt = "Export"
         savePanel.title = "Export accessories & keys"
+        savePanel.isExtensionHidden = false
+
+        let accessoryView = NSView()
+        let popUpButton = NSPopUpButton(title: "File type", target: self, action: #selector(exportFileTypeChanged(button:)))
+        popUpButton.addItems(withTitles: ["Property List", "JSON"])
+        popUpButton.selectItem(at: 0)
+        popUpButton.stringValue = "File type"
+        popUpButton.translatesAutoresizingMaskIntoConstraints = false
+        accessoryView.addSubview(popUpButton)
+
+        let popUpButtonLabel = NSTextField(labelWithString: "File type")
+        popUpButtonLabel.translatesAutoresizingMaskIntoConstraints = false
+        accessoryView.addSubview(popUpButtonLabel)
+        accessoryView.translatesAutoresizingMaskIntoConstraints = false
+
+        //        popUpButtonLabel.leadingAnchor.constraint(greaterThanOrEqualTo: accessoryView.leadingAnchor, constant: 20.0).isActive = true
+        popUpButtonLabel.trailingAnchor.constraint(equalTo: popUpButton.leadingAnchor, constant: -8.0).isActive = true
+        popUpButtonLabel.trailingAnchor.constraint(lessThanOrEqualTo: accessoryView.centerXAnchor, constant: 0).isActive = true
+        popUpButtonLabel.centerYAnchor.constraint(equalTo: popUpButton.centerYAnchor, constant: 0).isActive = true
+        //        popUpButton.trailingAnchor.constraint(lessThanOrEqualTo: accessoryView.trailingAnchor, constant: -20.0).isActive = true
+        popUpButton.leadingAnchor.constraint(lessThanOrEqualTo: accessoryView.centerXAnchor, constant: 0).isActive = true
+        popUpButton.topAnchor.constraint(equalTo: accessoryView.topAnchor, constant: 8.0).isActive = true
+        popUpButton.bottomAnchor.constraint(equalTo: accessoryView.bottomAnchor, constant: -8.0).isActive = true
+        popUpButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 20.0).isActive = true
+        popUpButton.widthAnchor.constraint(lessThanOrEqualToConstant: 200.0).isActive = true
+
+        savePanel.accessoryView = accessoryView
+        self.savePanel = savePanel
 
         let result = savePanel.runModal()
 
         if result == .OK,
-            let url = savePanel.url
+            var url = savePanel.url
         {
+            let selectedItemIndex = popUpButton.indexOfSelectedItem
+
             // Store the accessory file
-            try propertyList.write(to: url)
+            if selectedItemIndex == 0 {
+                if url.pathExtension != "plist" {
+                    url = url.appendingPathExtension("plist")
+                }
+                let propertyList = try PropertyListEncoder().encode(accessories)
+                try propertyList.write(to: url)
+            } else if selectedItemIndex == 1 {
+                if url.pathExtension != "json" {
+                    url = url.appendingPathExtension("json")
+                }
+                let jsonObject = try JSONEncoder().encode(accessories)
+                try jsonObject.write(to: url)
+            }
 
             return url
         }
         throw ImportError.cancelled
     }
 
+    @objc func exportFileTypeChanged(button: NSPopUpButton) {
+        if button.indexOfSelectedItem == 0 {
+            if #available(macOS 12.0, *) {
+                self.savePanel?.allowedContentTypes = [.propertyList]
+            } else {
+                self.savePanel?.allowedFileTypes = ["plist"]
+            }
+        } else {
+            if #available(macOS 12.0, *) {
+                self.savePanel?.allowedContentTypes = [.json]
+            } else {
+                self.savePanel?.allowedFileTypes = ["json"]
+            }
+        }
+    }
+
     /// Let the user select a file to import the accessories exported by another OpenHaystack instance.
     func importAccessories() throws {
         let openPanel = NSOpenPanel()
-        openPanel.allowedFileTypes = ["plist"]
+        if #available(macOS 12.0, *) {
+            openPanel.allowedContentTypes = [.json, .propertyList]
+        } else {
+            openPanel.allowedFileTypes = ["json", "plist"]
+        }
+
         openPanel.canCreateDirectories = true
         openPanel.directoryURL = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
         openPanel.message = "Import an accessories file that includes the private keys"
@@ -134,8 +205,13 @@ class AccessoryController: ObservableObject {
         if result == .OK,
             let url = openPanel.url
         {
-            let propertyList = try Data(contentsOf: url)
-            var importedAccessories = try PropertyListDecoder().decode([Accessory].self, from: propertyList)
+            let accessoryData = try Data(contentsOf: url)
+            var importedAccessories: [Accessory]
+            if url.pathExtension == "plist" {
+                importedAccessories = try PropertyListDecoder().decode([Accessory].self, from: accessoryData)
+            } else {
+                importedAccessories = try JSONDecoder().decode([Accessory].self, from: accessoryData)
+            }
 
             var updatedAccessories = self.accessories
             // Filter out accessories with the same id (no duplicates)
@@ -169,10 +245,8 @@ class AccessoryController: ObservableObject {
             case .failure(_):
                 completion(.failure(.activatePlugin))
             case .success(let accountData):
-
-                guard let token = accountData.searchPartyToken,
-                    token.isEmpty == false
-                else {
+                let token = accountData.searchPartyToken ?? self.searchPartyToken.data(using: .utf8) ?? Data()
+                if token.isEmpty {
                     completion(.failure(.searchPartyToken))
                     return
                 }
@@ -181,7 +255,12 @@ class AccessoryController: ObservableObject {
                     switch result {
                     case .failure(let error):
                         os_log(.error, "Downloading reports failed %@", error.localizedDescription)
-                        completion(.failure(.downloadingReportsFailed))
+                        switch error {
+                        case FindMyErrors.invalidSearchPartyToken:
+                            completion(.failure(.invalidSearchPartyToken))
+                        default:
+                            completion(.failure(.downloadingReportsFailed))
+                        }
                     case .success(let devices):
                         let reports = devices.compactMap({ $0.reports }).flatMap({ $0 })
                         if reports.isEmpty {

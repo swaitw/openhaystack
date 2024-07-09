@@ -23,6 +23,7 @@ struct OpenHaystackMainView: View {
     @State var alertType: AlertType?
     @State var popUpAlertType: PopUpAlertType?
     @State var errorDescription: String?
+    @State var scriptOutput: String?
     @State var searchPartyToken: String = ""
     @State var searchPartyTokenLoaded = false
     @State var mapType: MKMapType = .standard
@@ -37,12 +38,16 @@ struct OpenHaystackMainView: View {
 
     @State var showESP32DeploySheet = false
 
+    @AppStorage("searchPartyToken") private var settingsSPToken: String?
+    @AppStorage("useMailPlugin") private var settingsUseMailPlugin: Bool = false
+
     var body: some View {
 
         NavigationView {
 
             ManageAccessoriesView(
                 alertType: self.$alertType,
+                scriptOutput: self.$scriptOutput,
                 focusedAccessory: self.$focusedAccessory,
                 accessoryToDeploy: self.$accessoryToDeploy,
                 showESP32DeploySheet: self.$showESP32DeploySheet
@@ -133,7 +138,7 @@ struct OpenHaystackMainView: View {
 
             Button(
                 action: {
-                    if !self.mailPluginIsActive {
+                    if self.settingsUseMailPlugin && !self.mailPluginIsActive {
                         self.showMailPlugInPopover.toggle()
                         self.checkPluginIsRunning(silent: true, nil)
                     } else {
@@ -172,16 +177,25 @@ struct OpenHaystackMainView: View {
             return
         }
 
-        let pluginManager = MailPluginManager()
-
-        // Check if the plugin is installed
-        if pluginManager.isMailPluginInstalled == false {
-            // Install the mail plugin
-            self.alertType = .activatePlugin
-            self.checkPluginIsRunning(silent: true, nil)
-        } else {
-            self.checkPluginIsRunning(nil)
+        /// Checks if the search party token was set in the settings. If true the plugin is also not needed
+        if let tokenString = self.settingsSPToken {
+            self.searchPartyToken = tokenString
+            return
         }
+
+        /// Uses mail plugin if enabled in settings
+        if self.settingsUseMailPlugin {
+            let pluginManager = MailPluginManager()
+            // Check if the plugin is installed
+            if pluginManager.isMailPluginInstalled == false {
+                // Install the mail plugin
+                self.alertType = .activatePlugin
+                self.checkPluginIsRunning(silent: true, nil)
+            } else {
+                self.checkPluginIsRunning(nil)
+            }
+        }
+
 
     }
 
@@ -306,7 +320,19 @@ struct OpenHaystackMainView: View {
                 title: Text("Add the search party token"),
                 message: Text(
                     """
-                    Please paste the search party token below after copying itfrom the macOS Keychain.
+                    Please paste the search party token in the settings after copying it from the macOS Keychain.
+                    The item that contains the key can be found by searching for:
+                    com.apple.account.DeviceLocator.search-party-token
+                    """
+                ),
+                dismissButton: Alert.Button.okay())
+        case .invalidSearchPartyToken:
+            return Alert(
+                title: Text("Invalid search party token"),
+                message: Text(
+                    """
+                    The request returned an empty result, this is probably due to an invalid search party token.
+                    Please consider updating your search party token in the settings after copying it from the macOS Keychain.
                     The item that contains the key can be found by searching for:
                     com.apple.account.DeviceLocator.search-party-token
                     """
@@ -316,6 +342,11 @@ struct OpenHaystackMainView: View {
             return Alert(
                 title: Text("Could not deploy"),
                 message: Text("Deploying to microbit failed. Please reconnect the device over USB"),
+                dismissButton: Alert.Button.okay())
+        case .nrfDeployFailed:
+            return Alert(
+                title: Text("Could not deploy"),
+                message: Text(self.scriptOutput ?? "Unknown Error"),
                 dismissButton: Alert.Button.okay())
         case .deployedSuccessfully:
             return Alert(
@@ -381,7 +412,9 @@ struct OpenHaystackMainView: View {
 
         case keyError
         case searchPartyToken
+        case invalidSearchPartyToken
         case deployFailed
+        case nrfDeployFailed
         case deployedSuccessfully
         case deletionFailed
         case noReportsFound

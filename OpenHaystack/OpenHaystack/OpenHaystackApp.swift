@@ -16,6 +16,8 @@ struct OpenHaystackApp: App {
     var frameWidth: CGFloat? = nil
     var frameHeight: CGFloat? = nil
 
+    @State var checkedForUpdates = false
+
     init() {
         let accessoryController: AccessoryController
         if ProcessInfo().arguments.contains("-preview") {
@@ -35,9 +37,23 @@ struct OpenHaystackApp: App {
             OpenHaystackMainView()
                 .environmentObject(self.accessoryController)
                 .frame(width: self.frameWidth, height: self.frameHeight)
+                .onAppear {
+                    self.checkForUpdates()
+                }
         }
         .commands {
             SidebarCommands()
         }
+        #if os(macOS)
+        Settings {
+            OpenHaystackSettingsView()
+        }
+        #endif
+    }
+
+    func checkForUpdates() {
+        guard checkedForUpdates == false, ProcessInfo().arguments.contains("-stopUpdateCheck") == false else { return }
+        UpdateCheckController.checkForNewVersion()
+        checkedForUpdates = true
     }
 }
